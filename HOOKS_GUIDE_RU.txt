@@ -1,0 +1,389 @@
+ИНСТРУКЦИЯ: ДОБАВЛЕНИЕ НОВЫХ СИСТЕМ И YSI y_hooks
+==================================================
+
+Эта инструкция относится к Imperial Role Play и текущей структуре мода.
+В проекте используется YSI 4.0.2 и его система y_hooks.
+
+
+1. ГДЕ НАХОДИТСЯ ОСНОВНОЙ ФАЙЛ
+--------------------------------
+
+Основной файл:
+
+    gamemodes/imperialrp.pwn
+
+Он является только точкой входа. В нём должны находиться:
+
+    - стандартные include-подключения;
+    - настройки совместимости компилятора;
+    - подключение YSI/y_hooks;
+    - подключения файлов систем.
+
+Игровую логику, команды, диалоги и callback-функции не добавляйте
+непосредственно в imperialrp.pwn.
+
+Текущие обязательные строки для YSI:
+
+    #define AMX_OLD_CALL
+    #define __COMPILER_sNAMEMAX 31
+    #include <YSI/y_hooks>
+
+Не удаляйте эти строки без проверки сборки. Они нужны текущему Pawn
+Compiler и установленной версии YSI.
+
+
+2. КУДА ДОБАВЛЯТЬ НОВУЮ СИСТЕМУ
+--------------------------------
+
+Для новой системы создайте отдельную папку:
+
+    gamemodes/imperial/Systems/НазваниеСистемы/
+
+Примеры:
+
+    Systems/Bank/
+    Systems/Factions/
+    Systems/Houses/
+    Systems/Jobs/
+    Systems/Phone/
+
+Обычно внутри системы используются такие файлы:
+
+    core.inc       - состояние системы, enum, переменные, константы;
+    callbacks.inc  - игровые callback-функции;
+    commands.inc   - команды Pawn.CMD;
+    dialogs.inc    - обработчики диалогов;
+    stocks.inc     - вспомогательные функции;
+    database.inc   - SQL-запросы и сохранение данных.
+
+Не создавайте все файлы заранее без необходимости. Добавляйте только те,
+которые реально используются системой.
+
+
+3. КАК ПОДКЛЮЧИТЬ СИСТЕМУ
+-------------------------
+
+Добавьте include в gamemodes/imperialrp.pwn после её зависимостей.
+
+Например:
+
+    #include "imperial/Systems/Bank/core.inc"
+    #include "imperial/Systems/Bank/callbacks.inc"
+    #include "imperial/Systems/Bank/commands.inc"
+    #include "imperial/Systems/Bank/dialogs.inc"
+    #include "imperial/Systems/Bank/stocks.inc"
+
+Порядок важен:
+
+    1. определения и enum;
+    2. переменные состояния;
+    3. общие stocks;
+    4. callback-функции;
+    5. диалоги и команды.
+
+Если функция вызывается до места, где компилятор её видит, добавьте forward
+или измените порядок include.
+
+Путь с пробелом `Connections/DB connect` уже используется проектом.
+Новые папки лучше называть без пробелов: `Database`, `Factions`, `Phone`.
+
+
+4. КАК ХУКАТЬ ИГРОВЫЕ CALLBACK-ФУНКЦИИ
+--------------------------------------
+
+Вместо обычного:
+
+    public OnPlayerConnect(playerid)
+    {
+        // код
+        return 1;
+    }
+
+используйте:
+
+    hook OnPlayerConnect(playerid)
+    {
+        // код новой системы
+        return 1;
+    }
+
+Пример системы банков:
+
+    /*
+     * Система банка: обработка входа игрока и подготовка банковского состояния.
+     */
+
+    hook OnPlayerConnect(playerid)
+    {
+        BankBalance[playerid] = 0;
+        BankHasLoaded[playerid] = false;
+        return 1;
+    }
+
+    hook OnPlayerDisconnect(playerid, reason)
+    {
+        SaveBankData(playerid);
+        return 1;
+    }
+
+YSI объединит этот код с другими hook-функциями OnPlayerConnect и
+OnPlayerDisconnect из остальных файлов.
+
+Один callback можно хукать из нескольких систем. Не нужно вручную собирать
+один огромный OnPlayerConnect в Core.
+
+
+5. КАК ПЕРЕДАВАТЬ РЕЗУЛЬТАТ CALLBACK
+------------------------------------
+
+Для callback, который возвращает значение, сохраняйте корректный return.
+
+    hook OnPlayerText(playerid, text[])
+    {
+        if(!PlayerCanChat(playerid))
+        {
+            return 0;
+        }
+
+        return 1;
+    }
+
+Для OnPlayerText:
+
+    return 0 - остановить дальнейшую обработку сообщения;
+    return 1 - разрешить стандартную обработку сообщения.
+
+Для разных callback значение return означает разное. Перед изменением
+проверьте документацию SA-MP/Open.MP и текущую реализацию в проекте.
+
+Не делайте без необходимости `return 0` в общей системе: это может отменить
+обработку callback другими модулями или стандартным игровым кодом.
+
+
+6. КАК ХУКАТЬ ДИАЛОГИ
+---------------------
+
+Основной OnDialogResponse уже находится в Core/lifecycle.inc и выполняет
+маршрутизацию по dialog ID.
+
+Для нового диалога:
+
+    1. Добавьте новый ID в enum диалогов в Core/definitions.inc.
+    2. Создайте обработчик в dialogs.inc своей системы.
+    3. Добавьте один case в OnDialogResponse.
+
+Пример:
+
+    // В Systems/Bank/dialogs.inc
+    DialogBankMain(playerid, response, listitem)
+    {
+        if(!response)
+        {
+            return 1;
+        }
+
+        // обработка пункта банковского меню
+        return 1;
+    }
+
+    // В Core/lifecycle.inc
+    case DIALOG_BANK_MAIN:
+        return DialogBankMain(playerid, response, listitem);
+
+Сам DialogBankMain обычно не является hook-функцией. Это обычный обработчик,
+который вызывается маршрутизатором диалогов.
+
+
+7. КАК ДОБАВЛЯТЬ КОМАНДЫ
+------------------------
+
+Команды добавляйте в Systems/НазваниеСистемы/commands.inc.
+
+Пример:
+
+    CMD:balance(playerid, params[])
+    {
+        if(!pInfo[playerid][pLogged])
+        {
+            return SendError(playerid, "Вы не авторизованы!");
+        }
+
+        new message[96];
+        format(message, sizeof(message), "Баланс: %d", BankBalance[playerid]);
+        SendClientMessage(playerid, COLOR_INFO, message);
+        return 1;
+    }
+
+Для команд Pawn.CMD отдельный hook не требуется. Команда автоматически
+регистрируется после подключения файла commands.inc.
+
+
+8. MYSQL CALLBACKS НЕ ХУКАЮТСЯ
+-----------------------------
+
+Callback-функции, которые вызываются MySQL-плагином по имени строки, оставляйте
+обычными public:
+
+    forward OnBankDataLoaded(playerid);
+    public OnBankDataLoaded(playerid)
+    {
+        // чтение cache
+        return 1;
+    }
+
+Запрос:
+
+    mysql_tquery(connection, query, "OnBankDataLoaded", "d", playerid);
+
+Не заменяйте такой callback на `hook OnBankDataLoaded`. MySQL вызывает его
+по имени, и лишняя hook-обёртка может нарушить совместимость с dispatch
+плагина.
+
+
+9. НОВЫЕ СОБЫТИЯ МЕЖДУ СИСТЕМАМИ
+--------------------------------
+
+Если это не стандартный callback SA-MP/Open.MP, обычного `hook` может быть
+недостаточно. Для внутреннего события используйте обычную функцию или stock.
+
+Пример:
+
+    stock Bank_OnDeposit(playerid, amount)
+    {
+        BankBalance[playerid] += amount;
+        return 1;
+    }
+
+Если требуется несколько независимых обработчиков одного внутреннего события,
+создайте отдельные функции и вызывайте их из одного координатора. Не
+подменяйте `hook` обычной функцией без проверки документации YSI.
+
+
+10. ОБЩИЕ ПЕРЕМЕННЫЕ И ЗАВИСИМОСТИ
+---------------------------------
+
+Состояние новой системы объявляйте в её core.inc:
+
+    enum e_BankData
+    {
+        bank_balance,
+        bool:bank_loaded
+    }
+
+    new BankInfo[MAX_PLAYERS][e_BankData];
+
+Если другая система использует эти данные, подключайте Bank/core.inc раньше
+файла-потребителя или вынесите общий тип в Core/definitions.inc.
+
+Не создавайте вторую переменную с тем же именем. Перед добавлением сначала
+ищите имя по всему каталогу gamemodes/imperial.
+
+
+11. ЗАГОЛОВОК НОВОГО ФАЙЛА
+--------------------------
+
+В начале каждого нового файла оставляйте поясняющий комментарий:
+
+    /*
+     * IMPERIAL ROLE PLAY - Systems/Bank/callbacks.inc
+     * Callback-функции банковской системы.
+     * Файл содержит только код банковской системы.
+     */
+
+Комментарии пишите на русском. Названия функций, переменных, enum и
+стандартных callback оставляйте в принятом стиле исходного кода.
+
+
+12. ЧЕК-ЛИСТ ПЕРЕД СБОРКОЙ
+---------------------------
+
+Проверьте:
+
+    [ ] Новый файл подключён в gamemodes/imperialrp.pwn.
+    [ ] core.inc подключён раньше зависимых файлов.
+    [ ] Игровые callback используют `hook`, а не второй `public`.
+    [ ] MySQL callbacks оставлены `public`.
+    [ ] Нет повторных enum, переменных или функций.
+    [ ] Внутри строки нет случайного удаления `return`.
+    [ ] Диалоговый ID добавлен в маршрутизатор OnDialogResponse.
+    [ ] Команды находятся в commands.inc системы.
+    [ ] В основном .pwn нет игровой логики.
+
+
+13. КОМПИЛЯЦИЯ НА СЕРВЕРЕ
+-------------------------
+
+Текущий серверный компилятор запускается так:
+
+    cd /home/openmp/Server
+    LD_LIBRARY_PATH=/home/openmp/Server/qawno \
+    ./qawno/pawncc \
+        -iqawno/include \
+        -ogamemodes/imperialrp.amx \
+        gamemodes/imperialrp.pwn
+
+Успешная сборка заканчивается строками `Code size` и `Total requirements`.
+Предупреждения сами по себе не означают ошибку, но новые предупреждения
+нужно проверять.
+
+После успешной сборки:
+
+    systemctl restart openmp.service
+    systemctl is-active openmp.service
+    ss -lunp | grep 7777
+    journalctl -u openmp.service -n 80 --no-pager
+
+В журнале должна появиться строка:
+
+    GAMEMODE LOADED SUCCESSFULLY
+
+
+14. ВАЖНЫЕ ОШИБКИ
+-----------------
+
+Ошибка `symbol already defined`:
+    Один и тот же enum, stock, public или переменная подключены дважды.
+    Найдите дубликат и оставьте только одну реализацию.
+
+Ошибка `cannot read from file`:
+    Неверный путь include или отсутствует пакет YSI. Проверьте регистр,
+    разделители пути и наличие файла на сервере.
+
+Ошибка YSI про `sNAMEMAX`:
+    Для текущей установки должен быть задан:
+
+        #define __COMPILER_sNAMEMAX 31
+
+Ошибка YSI про amx_assembly:
+    Должна использоваться совместимая версия amx_assembly и параметр
+    `#define AMX_OLD_CALL`, который сейчас уже есть в entrypoint.
+
+Сервер пишет, что gamemode загрузился, но новая система не работает:
+    Проверьте, что новый AMX действительно скопирован в
+    `gamemodes/imperialrp.amx`, а имя `imperialrp 1` в config.json не менялось.
+
+
+15. КАК ОБНОВИТЬ МОД ЧЕРЕЗ FTP
+------------------------------
+
+Если компилируете AMX на своём компьютере, загружайте его строго сюда:
+
+    /gamemodes/imperialrp.amx
+
+Имя файла должно совпадать с:
+
+    "main_scripts": [
+        "imperialrp 1"
+    ]
+
+После загрузки:
+
+    1. Сделайте резервную копию текущего AMX.
+    2. Убедитесь, что FTP передал файл полностью.
+    3. Перезапустите Open.MP.
+    4. Проверьте `GAMEMODE LOADED SUCCESSFULLY`.
+
+AMX, собранный на Windows, обычно работает, если это обычный Pawn AMX
+совместимой версии и все используемые плагины есть на сервере. Надёжнее
+собирать тем же pawncc 3.10.11 и с теми же include-файлами, которые
+установлены на сервере.
